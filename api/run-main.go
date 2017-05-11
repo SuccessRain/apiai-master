@@ -12,11 +12,13 @@ import (
 var target string
 var inputFP string
 var token string
+var session string
 
 func AddSharedFlags(fs *flag.FlagSet) {
 	fs.StringVar(&target, "t", "", "required, intent or entity")
 	fs.StringVar(&inputFP, "i", "", "required, path to the input file")
 	fs.StringVar(&token, "token", "", "required, API.AI token")
+	fs.StringVar(&session, "session", "", "required, API.AI session")
 }
 
 type IntentUtterance struct {
@@ -54,25 +56,32 @@ func ReadIntentsFromFile(inputFP string) ([]ObjectFile, error) {
 
 var responseAll ai.ApiResponse
 
-// create an intent
-func CreateIntent(client *ai.Client, intentName string, userSays string,
-	action string, lstResponse []string, ) int{
+func convertStrinToUsersays(arr []string) []ai.UserSays{
+	var uss []ai.UserSays
+	for _, s := range arr {
+		var us ai.UserSays
+		us = ai.UserSays{
+			Data: []ai.UserSaysData{
+				ai.UserSaysData{
+					Text: s,
+				},
 
+			},
+		}
+		uss = append(uss, us)
+	}
+	return uss
+}
+
+// create an intent
+func CreateIntent(client *ai.Client, intentName string, userSays []string,
+	action string, lstResponse []string, ) int{
 	var count int = 0;
 	response, err := client.CreateIntent(ai.IntentObject{
 		Name:     intentName,
 		Auto:     true,
 		Priority: 5,
-		UserSays: []ai.UserSays{
-			ai.UserSays{
-				Data: []ai.UserSaysData{
-					ai.UserSaysData{
-						Text: userSays,
-					},
-
-				},
-			},
-		},
+		UserSays: convertStrinToUsersays(userSays),
 		Responses: []ai.IntentResponse{
 			ai.IntentResponse{
 				Action:        action,
@@ -154,7 +163,6 @@ func createEntity(client *ai.Client, entityName string, value string, synomyms [
 }
 
 func main()  {
-
 	trainCmd := flag.NewFlagSet("train", flag.ExitOnError)
 	AddSharedFlags(trainCmd)
 
@@ -163,6 +171,7 @@ func main()  {
 
 	if len(os.Args) < 2 {
 		fmt.Println("Error: Input is not enough")
+		fmt.Println(helpMessage)
 		os.Exit(1)
 	}
 
@@ -171,37 +180,57 @@ func main()  {
 		trainCmd.Parse(os.Args[2:])
 	}else if command == "test" {
 		testCmd.Parse(os.Args[2:])
+	}else if command == "help" {
+		fmt.Println(helpMessage)
+		os.Exit(0)
 	}
 
 	if target != "intent" && target != "entity" {
 		fmt.Println("Error: You must choose intent or entity")
-		//fmt.Println(helpMessage)
+		fmt.Println(helpMessage)
 		os.Exit(1)
 	}
 
 	if inputFP == "" {
 		fmt.Println("Error: Input file is required but empty")
-		//fmt.Println(helpMessage)
+		fmt.Println(helpMessage)
 		os.Exit(1)
 	}
 
 	if token == "" {
 		fmt.Println("Error: Token is required")
-		//fmt.Println(helpMessage)
+		fmt.Println(helpMessage)
+		os.Exit(1)
+	}
+	if session == "" {
+		fmt.Println("Error: Session is required")
+		fmt.Println(helpMessage)
 		os.Exit(1)
 	}
 
-	token := "72e1d493148a4a58826cb1fa3c7adfb4"
+	//target = "intent"
+	//token := "72e1d493148a4a58826cb1fa3c7adfb4"
+
 
 	// setup a client
-	client := ai.NewClient(token)
+	client := ai.NewClient(session)
 	client.Verbose = false
 
+	//CreateIntent(client,"intent_Name",[]string{"C", "A", "B"}, "A", []string{"D","E","F"})
 	/*
-	obj, err := ReadIntentsFromFile(inputFP)
-	fmt.Print("OBJECT: \t"); fmt.Println(obj)
-	fmt.Print("ERROR: \t"); fmt.Println(err)
+	qr, _ := client.Query(ai.Query{Query: []string{"VTV Cab",}})
+	fmt.Println(qr)
+
+	action := qr.Result.Action
+	value := qr.Result.Fulfillment.Speech
+
+	fmt.Print("ACTION:\t"); fmt.Println(action)
+	fmt.Print("VALUE:\t"); fmt.Println(value)
+	fmt.Print("FULL:\t"); fmt.Println(qr.Result)
+	fmt.Print("METADATA:\t"); fmt.Println(qr.Result.Metadata.IntentName)
 	*/
+
+	//**********
 
 	if trainCmd.Parsed() {
 		if target == "intent"{
@@ -210,10 +239,11 @@ func main()  {
 			if err != nil{
 				fmt.Println(err)
 			}
-			for i := 0; i < len(obj); i++ {
-				count += CreateIntent(client,obj[i].Intent,obj[i].Name, obj[i].Name, []string{obj[i].Response,})
+			multi := recycleInentName(obj)
+			for i := 0; i < len(multi); i++ {
+				count += CreateIntent(client,multi[i].intentName,multi[i].values, multi[i].intentName, []string{obj[i].Response,})
 			}
-			fmt.Printf("Success: %f \n", float64(count) / float64(len(obj)) * 100)
+			fmt.Printf("Success: %f \n", float64(count) / float64(len(multi)) * 100)
 		}else if target == "entity"{
 			var count int = 0
 			obj, err := ReadIntentsFromFile(inputFP)
@@ -229,46 +259,24 @@ func main()  {
 
 	if testCmd.Parsed() {
 		if target == "intent"{
-			count := 0
+			var count int = 0
 			obj, err := ReadIntentsFromFile(inputFP)
 			if err != nil{
 				fmt.Println(err)
 			}
-
-			intents, err := client.AllIntents();
-			if  err != nil {
-				fmt.Println(err)
-			}
 			for i := 0; i < len(obj); i++ {
-				check := true
-				for _, intent := range intents {
-					// get an intent
-					if response, err := client.Intent(intent.Id); err == nil {
-						//fmt.Print("Convert 1:\t"); fmt.Print(convertUsaystoString(response.UserSays));fmt.Print("\tName 1:\t");fmt.Println(obj[i].Name)
-						if containsArray(obj[i].Name, convertUsaystoString(response.UserSays)){
-							fmt.Println("Correct!")
-							count ++
-							check = false
-
-							/*
-							fmt.Print("Convert 2:\t"); fmt.Print(convertIntentResponsetoString(response.Responses));fmt.Print("\tResponse 2:\t");fmt.Println(obj[i].Response)
-							fmt.Print("RESPONSE:\t"); fmt.Println(response.Responses)
-							if containsArray(obj[i].Response, convertIntentResponsetoString(response.Responses)){
-								fmt.Println("Correct!")
-								count ++
-							}else{
-								fmt.Println("No Correct 2!")
-							}
-							*/
-						}
-						//fmt.Print("RESPONE:\t"); fmt.Println(response)
-						//fmt.Printf(">>> intent = %+v\n", response)
-					} else {
-						fmt.Printf("*** error: %s\n", err)
+				//fmt.Print("TOKEN:\t"); fmt.Println(token)
+				qr, _ := client.Query(ai.Query{Query: []string{obj[i].Name,}},token,session)
+				if qr != nil{
+					intentName := qr.Result.Metadata.IntentName
+					if strings.Compare(obj[i].Intent, intentName) == 0 {
+						fmt.Print(i); fmt.Println(".\t Correct!")
+						count ++;
+					}else if strings.Compare("Default Fallback Intent", intentName) != 0 {
+						fmt.Print(i); fmt.Print(".\t No Correct!\t");fmt.Println(intentName)
+					}else{
+						fmt.Print(i); fmt.Println(".\t No Correct!")
 					}
-				}
-				if check{
-					fmt.Println("No Correct!")
 				}
 			}
 			fmt.Printf("Success: %f \n", float64(count) / float64(len(obj)) * 100)
@@ -306,6 +314,8 @@ func main()  {
 			fmt.Printf("Success: %f \n", float64(count) / float64(len(obj)) * 100)
 		}
 	}
+
+
 }
 
 func containsArray(a string, list []string) bool {
@@ -344,3 +354,91 @@ func convertEntityEntryObjecttoString(ent []ai.EntityEntryObject) []string{
 	}
 	return result
 }
+
+type ObjectMutilValue struct{
+	intentName string
+	values []string
+}
+
+func recycleInentName(objs []ObjectFile)  []ObjectMutilValue {
+
+	var omvs []ObjectMutilValue
+
+	data := make(map[string][]string)
+	for _, a := range objs {
+		samples := data[a.Intent]
+		samples = append(samples, a.Name)
+		data[a.Intent] = samples
+	}
+
+	for key, value := range data {
+
+		var omv ObjectMutilValue
+		omv.intentName = key
+		omv.values = value
+		omvs = append(omvs, omv)
+	}
+
+	return omvs
+
+	/*
+	var omvs []ObjectMutilValue
+	var omvCheck []string
+	for _, a := range objs {
+		var omv ObjectMutilValue
+		fmt.Print("A.INTENT:\t"); fmt.Println(a.Intent)
+		fmt.Print("LENGTH OMVCHECK:\t"); fmt.Println(len(omvCheck))
+		if containsArray(a.Intent, omvCheck) == false {
+			fmt.Println("VAO FALSE")
+			omv.intentName = a.Intent
+			omv.values = append(omv.values, a.Name)
+
+			omvCheck = append(omvCheck, a.Intent)
+			omvs = append(omvs, omv)
+		}else{
+			fmt.Println("VAO TRUE")
+			for _, b := range omvs {
+				if b.intentName == a.Intent{
+					fmt.Print("VAO TRONG IF:\t"); fmt.Println(a.Name)
+					fmt.Print("VAO TRONG IF - LENGTH VLUES 1:\t"); fmt.Println(len(b.values))
+					b.values = append(b.values, a.Name)
+
+					fmt.Print("VAO TRONG IF - LENGTH VLUES 2:\t"); fmt.Println(len(b.values))
+					break
+				}
+			}
+		}
+	}
+
+	fmt.Print("OMVCHECK:\t"); fmt.Println(len(omvCheck))
+	fmt.Print("MOT PHAN TU:\t"); fmt.Println(omvCheck[0])
+
+	fmt.Print("AHIHIHIHIHI:\t"); fmt.Println(len(omvs))
+	fmt.Print("MOT PHAN TU:\t"); fmt.Println(omvs[0])
+	return omvs
+	*/
+}
+
+const helpMessage string = `
+api is CLI tool that helps you train and test API.AI in terminal
+
+Usage: api <command> <option>
+Available commands and corresponding options:
+	train
+	  -t string
+	    	required, type of training (intent, entity)
+	  -i string
+	    	required, path to your input file
+	  -token string
+	  		required, API.AI token
+
+	test
+	  -t string
+	    	required, type of training (intent, entity)
+	  -i string
+	    	required, path to your input file
+	  -token string
+	  		required, API.AI token
+
+	help
+`
